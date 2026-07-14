@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GGSel - P2P Гарант</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Загрузка -->
+        <div id="loading" class="loading-overlay">
+            <div class="loader"></div>
+            <p>Загрузка GGSel...</p>
+        </div>
+
+        <!-- Верхняя панель -->
+        <header class="header">
+            <div class="header-top">
+                <div class="logo">
+                    <span class="logo-icon">🛡️</span>
+                    <span class="logo-text">GGSel</span>
+                </div>
+                <div class="header-actions">
+                    <button class="icon-btn" onclick="showNotifications()">
+                        <i class="fas fa-bell"></i>
+                        <span class="badge">3</span>
+                    </button>
+                    <button class="icon-btn" onclick="toggleMenu()">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="header-bottom">
+                <div class="balance-card">
+                    <div class="balance-info">
+                        <span class="balance-label">💰 Баланс</span>
+                        <span class="balance-amount" id="userBalance">1,245.50 USD</span>
+                    </div>
+                    <button class="btn-primary-small" onclick="showReplenish()">
+                        <i class="fas fa-plus"></i> Пополнить
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Навигация -->
+        <nav class="nav-tabs">
+            <button class="nav-tab active" data-tab="deals" onclick="switchTab('deals')">
+                <i class="fas fa-exchange-alt"></i>
+                <span>Сделки</span>
+            </button>
+            <button class="nav-tab" data-tab="market" onclick="switchTab('market')">
+                <i class="fas fa-store"></i>
+                <span>Маркет</span>
+            </button>
+            <button class="nav-tab" data-tab="profile" onclick="switchTab('profile')">
+                <i class="fas fa-user"></i>
+                <span>Профиль</span>
+            </button>
+            <button class="nav-tab" data-tab="referrals" onclick="switchTab('referrals')">
+                <i class="fas fa-users"></i>
+                <span>Рефералы</span>
+            </button>
+        </nav>
+
+        <!-- Основной контент -->
+        <main class="content">
+            <!-- Вкладка "Сделки" -->
+            <div id="tab-deals" class="tab-content active">
+                <div class="section-header">
+                    <h2>Мои сделки</h2>
+                    <button class="btn-outline-small" onclick="createDeal()">
+                        <i class="fas fa-plus"></i> Создать
+                    </button>
+                </div>
+                
+                <div class="deals-filters">
+                    <button class="filter-btn active" onclick="filterDeals('all')">Все</button>
+                    <button class="filter-btn" onclick="filterDeals('active')">Активные</button>
+                    <button class="filter-btn" onclick="filterDeals('completed')">Завершённые</button>
+                </div>
+
+                <div class="deals-list" id="dealsList">
+                    <!-- Сделки будут загружены через JavaScript -->
+                </div>
+            </div>
+
+            <!-- Вкладка "Маркет" -->
+            <div id="tab-market" class="tab-content">
+                <div class="section-header">
+                    <h2>Товары и услуги</h2>
+                    <button class="btn-outline-small" onclick="showFilters()">
+                        <i class="fas fa-sliders-h"></i> Фильтры
+                    </button>
+                </div>
+
+                <div class="market-grid" id="marketGrid">
+                    <!-- Товары загружаются через JavaScript -->
+                </div>
+            </div>
+
+            <!-- Вкладка "Профиль" -->
+            <div id="tab-profile" class="tab-content">
+                <div class="profile-card">
+                    <div class="profile-avatar">
+                        <i class="fas fa-user-circle" style="font-size: 80px; color: #6C63FF;"></i>
+                    </div>
+                    <div class="profile-info">
+                        <h2 id="userName">@username</h2>
+                        <p class="profile-id">ID: 123456789</p>
+                        <div class="profile-stats">
+                            <div class="stat-item">
+                                <span class="stat-value" id="successDeals">42</span>
+                                <span class="stat-label">Успешных сделок</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="rating">4.9</span>
+                                <span class="stat-label">Рейтинг</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="referralsCount">7</span>
+                                <span class="stat-label">Рефералов</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Настройки</h3>
+                    <div class="settings-item" onclick="switchLanguage()">
+                        <i class="fas fa-globe"></i>
+                        <span>Язык / Language</span>
+                        <span class="settings-value">Русский</span>
+                        <i class="fas fa-chevron-right"></i>
+                    </div>
+                    <div class="settings-item" onclick="showSecurity()">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>Безопасность</span>
+                        <i class="fas fa-chevron-right"></i>
+                    </div>
+                    <div class="settings-item" onclick="showNotificationsSettings()">
+                        <i class="fas fa-bell"></i>
+                        <span>Уведомления</span>
+                        <i class="fas fa-chevron-right"></i>
+                    </div>
+                    <div class="settings-item" onclick="support()">
+                        <i class="fas fa-headset"></i>
+                        <span>Поддержка</span>
+                        <i class="fas fa-chevron-right"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Вкладка "Рефералы" -->
+            <div id="tab-referrals" class="tab-content">
+                <div class="referral-header">
+                    <h2>Реферальная программа</h2>
+                    <div class="referral-bonus">
+                        <span class="bonus-label">Ваш бонус</span>
+                        <span class="bonus-amount" id="referralEarnings">284.50 USD</span>
+                    </div>
+                </div>
+
+                <div class="referral-link-box">
+                    <p>Приглашайте друзей и получайте 50% от комиссии!</p>
+                    <div class="link-container">
+                        <input type="text" id="referralLink" value="https://t.me/ggsel_bot?start=ref123" readonly>
+                        <button class="btn-primary-small" onclick="copyReferralLink()">
+                            <i class="fas fa-copy"></i> Копировать
+                        </button>
+                    </div>
+                </div>
+
+                <div class="referral-stats">
+                    <div class="stat-card">
+                        <span class="stat-number" id="totalReferrals">7</span>
+                        <span class="stat-label">Всего рефералов</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-number" id="activeReferrals">3</span>
+                        <span class="stat-label">Активных</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-number" id="referralCommission">142.25</span>
+                        <span class="stat-label">Заработано с комиссии</span>
+                    </div>
+                </div>
+
+                <div class="referral-list" id="referralList">
+                    <h3>Ваши рефералы</h3>
+                    <!-- Рефералы загружаются через JavaScript -->
+                </div>
+            </div>
+        </main>
+
+        <!-- Модальные окна -->
+        <div id="modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modalTitle">Заголовок</h3>
+                    <button class="close-btn" onclick="closeModal()">×</button>
+                </div>
+                <div id="modalBody" class="modal-body">
+                    <!-- Содержимое модального окна -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Нижняя панель -->
+        <footer class="footer">
+            <p>© 2026 GGSel - Ваш надёжный P2P-гарант</p>
+            <p class="footer-links">
+                <a href="#" onclick="showTerms()">Условия</a>
+                <span>|</span>
+                <a href="#" onclick="showPrivacy()">Конфиденциальность</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
