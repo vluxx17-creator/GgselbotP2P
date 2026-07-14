@@ -5,4 +5,4 @@ ADMIN_IDS = [8400055743]  # Ваш ID
 DATABASE_URL = "sqlite:///data.db"
 
 # URL для мини-приложения (замените на ваш после деплоя)
-MINI_APP_URL = "https://ваш-домен.com"  # Например: https://ggsel-bot.onrender.com
+MINI_APP_URL = "https://ggselbotp2p.onrender.com"  # Например: https://ggsel-bot.onrender.com
