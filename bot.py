@@ -1,19 +1,48 @@
 import asyncio
 import logging
-from telegram import Bot, Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.utils import executor
 from config import BOT_TOKEN, ADMIN_IDS, MINI_APP_URL
 from database import init_db, get_or_create_user, get_user_by_telegram_id, get_user_by_id
-from keyboards import main_menu_keyboard, admin_panel_keyboard, cancel_keyboard
 import database as db
 
 logging.basicConfig(level=logging.INFO)
 
-# Состояния для ConversationHandler
-(WAITING_COMPLETE_DEAL, WAITING_BALANCE_AMOUNT, WAITING_ADMIN_USER_ID) = range(3)
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(bot)
+dp.middleware.setup(LoggingMiddleware())
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_or_create_user(update.effective_user.id, update.effective_user.username)
+# Главное меню
+def main_menu():
+    return InlineKeyboardMarkup(row_width=2).add(
+        InlineKeyboardButton("💰 Баланс", callback_data="balance"),
+        InlineKeyboardButton("📋 Мои сделки", callback_data="my_deals"),
+        InlineKeyboardButton("👥 Рефералы", callback_data="referrals"),
+        InlineKeyboardButton("🌐 Язык / Lang", callback_data="language"),
+        InlineKeyboardButton("🛠 Техподдержка", callback_data="support"),
+        InlineKeyboardButton("🌍 Открыть GGSel", web_app=WebAppInfo(url=MINI_APP_URL)),
+        InlineKeyboardButton("📱 Мини-приложение", web_app=WebAppInfo(url=MINI_APP_URL))
+    )
+
+def admin_panel():
+    return InlineKeyboardMarkup(row_width=2).add(
+        InlineKeyboardButton("✅ Завершить сделку", callback_data="admin_complete_deal"),
+        InlineKeyboardButton("💳 Выдать баланс", callback_data="admin_give_balance"),
+        InlineKeyboardButton("👑 Выдать админа", callback_data="admin_give_admin"),
+        InlineKeyboardButton("👑 Снять админа", callback_data="admin_remove_admin"),
+        InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
+        InlineKeyboardButton("📨 Сообщения поддержки", callback_data="admin_support_messages"),
+        InlineKeyboardButton("❌ Закрыть", callback_data="close_admin")
+    )
+
+def cancel_keyboard():
+    return InlineKeyboardMarkup().add(InlineKeyboardButton("❌ Отмена", callback_data="cancel_action"))
+
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message):
+    get_or_create_user(message.from_user.id, message.from_user.username)
     text = (
         "✅ *Добро пожаловать в GGSel!*\n\n"
         "📌 *Ваш надёжный P2P-гарант:*\n"
@@ -24,279 +53,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🌍 *Наш сайт:* https://ggsel.net\n"
         "📱 *Мини-приложение:* нажмите кнопку ниже"
     )
-    await update.message.reply_text(text, parse_mode='Markdown', reply_markup=main_menu_keyboard())
+    await message.reply(text, parse_mode="Markdown", reply_markup=main_menu())
 
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "balance":
-        user_id = get_or_create_user(query.from_user.id, query.from_user.username)
-        balance = db.get_user_balance(user_id)
-        user = db.get_user_by_id(user_id)
-        transactions = db.get_user_transactions(user_id, limit=5)
-        text = f"💰 *Ваш баланс:* `{balance}` USD\n📊 *Успешных сделок:* `{user['success_deals']}`\n\n"
-        if transactions:
-            text += "📜 *Последние транзакции:*\n"
-            for t in transactions:
-                sign = "+" if t['amount'] > 0 else ""
-                text += f"• `{t['transaction_type']}`: {sign}`{t['amount']}` USD\n"
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=main_menu_keyboard())
-
-    elif data == "my_deals":
-        user_id = get_or_create_user(query.from_user.id, query.from_user.username)
-        deals = db.get_user_deals(user_id)
-        if not deals:
-            await query.edit_message_text("📋 *У вас пока нет сделок.*", parse_mode='Markdown', reply_markup=main_menu_keyboard())
-            return
-        text = "📋 *Ваши сделки:*\n\n"
-        for deal in deals[:5]:
-            status_emoji = {'created':'⏳','paid':'💳','completed':'✅','cancelled':'❌'}.get(deal['status'],'❓')
-            text += f"{status_emoji} *Сделка* `#{deal['memo']}`\n   Сумма: `{deal['amount']}` {deal['currency']}\n   Статус: _`{deal['status']}`_\n   📅 `{deal['created_at']}`\n\n"
-        if len(deals) > 5:
-            text += f"_... и ещё `{len(deals)-5}` сделок_"
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=main_menu_keyboard())
-
-    elif data == "referrals":
-        user_id = get_or_create_user(query.from_user.id, query.from_user.username)
-        earnings = db.get_referral_earnings(user_id)
-        referrals = db.get_referrals(user_id)
-        text = f"👥 *Реферальная программа*\n\n💰 Заработано: `{earnings}` USD\n👤 Приглашено: `{len(referrals)}` человек\n\n"
-        if referrals:
-            text += "📋 *Ваши рефералы:*\n"
-            for ref in referrals[:5]:
-                text += f"• @{ref['username'] or ref['telegram_id']} — заработано: `{ref['earned']}` USD\n"
-        text += f"\n🔗 *Ваша реферальная ссылка:*\n`t.me/ggsel_bot?start=ref{user_id}`"
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=main_menu_keyboard())
-
-    elif data == "language":
-        await query.edit_message_text("🌐 *Выберите язык / Choose language*\n\n🇷🇺 Русский\n🇬🇧 English", parse_mode='Markdown', reply_markup=main_menu_keyboard())
-
-    elif data == "support":
-        await query.edit_message_text("🛠 *Техподдержка*\n\nЕсли у вас возникли вопросы, напишите нам.\nНажмите кнопку '✉️ Сообщение', чтобы отправить запрос.\n\n⏳ *Время ответа:* до 24 часов.", parse_mode='Markdown', reply_markup=main_menu_keyboard())
-
-    elif data == "message_support":
-        await query.edit_message_text("✉️ *Напишите ваше сообщение для поддержки.*\n\nОпишите вашу проблему подробно, приложите скриншоты если нужно.\nМы ответим вам в ближайшее время.", parse_mode='Markdown', reply_markup=main_menu_keyboard())
-
-    elif data == "cancel_action":
-        context.user_data.clear()
-        await query.edit_message_text("✅ *Действие отменено.*", parse_mode='Markdown', reply_markup=admin_panel_keyboard())
-
-    elif data == "admin_back":
-        context.user_data.clear()
-        await query.edit_message_text("🛡 *Админ-панель GGSel*\n\nВыберите действие:", parse_mode='Markdown', reply_markup=admin_panel_keyboard())
-
-    elif data == "close_admin":
-        await query.delete_message()
-
-    # ----- Админские -----
-    elif data == "admin_complete_deal":
-        if query.from_user.id not in ADMIN_IDS:
-            await query.answer("⛔ Доступ запрещён", show_alert=True)
-            return
-        await query.edit_message_text("✅ *Завершение сделки*\n\nВведите `мемо` (код) сделки для завершения.\nПример: `uCBnsWty`\n\nСделка будет завершена, продавцу начислены деньги.", parse_mode='Markdown', reply_markup=cancel_keyboard())
-        context.user_data['admin_action'] = 'complete_deal'
-        return WAITING_COMPLETE_DEAL
-
-    elif data == "admin_give_balance":
-        if query.from_user.id not in ADMIN_IDS:
-            await query.answer("⛔ Доступ запрещён", show_alert=True)
-            return
-        await query.edit_message_text("💳 *Выдача баланса*\n\nВведите ID пользователя (или @username) и сумму через пробел.\nПример: `123456 100` или `@username 50`\n\nСумма будет добавлена к балансу пользователя.", parse_mode='Markdown', reply_markup=cancel_keyboard())
-        context.user_data['admin_action'] = 'give_balance'
-        return WAITING_BALANCE_AMOUNT
-
-    elif data == "admin_give_admin":
-        if query.from_user.id not in ADMIN_IDS:
-            await query.answer("⛔ Доступ запрещён", show_alert=True)
-            return
-        await query.edit_message_text("👑 *Выдача прав администратора*\n\nВведите ID пользователя (или @username), которому хотите выдать права администратора.\nПример: `123456` или `@username`", parse_mode='Markdown', reply_markup=cancel_keyboard())
-        context.user_data['admin_action'] = 'give_admin'
-        return WAITING_ADMIN_USER_ID
-
-    elif data == "admin_remove_admin":
-        if query.from_user.id not in ADMIN_IDS:
-            await query.answer("⛔ Доступ запрещён", show_alert=True)
-            return
-        await query.edit_message_text("👑 *Снятие прав администратора*\n\nВведите ID пользователя (или @username), у которого хотите снять права администратора.\nПример: `123456` или `@username`", parse_mode='Markdown', reply_markup=cancel_keyboard())
-        context.user_data['admin_action'] = 'remove_admin'
-        return WAITING_ADMIN_USER_ID
-
-    elif data == "admin_stats":
-        if query.from_user.id not in ADMIN_IDS:
-            await query.answer("⛔ Доступ запрещён", show_alert=True)
-            return
-        text = "📊 *Статистика GGSel*\n\n👥 *Пользователей:* 64,742\n📈 *Всего сделок:* 12,847\n💰 *Общий оборот:* 2,345,678 USD\n👑 *Администраторов:* 5\n⭐ *Средний рейтинг:* 4.9\n\n_Данные обновлены: 14.07.2026_"
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=admin_panel_keyboard())
-
-    elif data == "admin_support_messages":
-        if query.from_user.id not in ADMIN_IDS:
-            await query.answer("⛔ Доступ запрещён", show_alert=True)
-            return
-        messages = db.get_unanswered_support_messages()
-        if not messages:
-            await query.edit_message_text("📨 *Новых сообщений поддержки нет.*", parse_mode='Markdown', reply_markup=admin_panel_keyboard())
-            return
-        text = "📨 *Сообщения поддержки:*\n\n"
-        for msg in messages[:5]:
-            user = db.get_user_by_id(msg['user_id'])
-            text += f"👤 @{user['username'] or user['telegram_id']}\n📝 `{msg['message_text'][:100]}`\n📅 `{msg['created_at']}`\n\n"
-        if len(messages) > 5:
-            text += f"_... и ещё {len(messages)-5} сообщений_"
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=admin_panel_keyboard())
-
-    return ConversationHandler.END
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Если это ответ на админское действие
-    if context.user_data.get('admin_action'):
-        action = context.user_data['admin_action']
-        text = update.message.text.strip()
-        user_id = update.effective_user.id
-
-        if action == 'complete_deal':
-            if user_id not in ADMIN_IDS:
-                await update.message.reply_text("⛔ Доступ запрещён")
-                return
-            deal = db.get_deal_by_memo(text)
-            if not deal:
-                await update.message.reply_text("❌ Сделка с таким мемо не найдена. Попробуйте снова.")
-                return
-            if deal['status'] == 'completed':
-                await update.message.reply_text("❌ Эта сделка уже завершена.")
-                return
-            success = db.complete_deal(deal['id'])
-            if success:
-                seller = db.get_user_by_id(deal['seller_id'])
-                buyer = db.get_user_by_id(deal['buyer_id'])
-                commission = int(deal['amount'] * 0.05)
-                seller_payout = deal['amount'] - commission
-                try:
-                    await update.message.bot.send_message(
-                        seller['telegram_id'],
-                        f"✅ *Сделка `#{text}` завершена!*\n\n💰 Вам начислено: `{seller_payout}` USD\n📊 Комиссия: `{commission}` USD\n👤 Покупатель: @{buyer['username'] or buyer['telegram_id']}\n\n_Спасибо за использование GGSel!_",
-                        parse_mode='Markdown'
-                    )
-                    await update.message.bot.send_message(
-                        buyer['telegram_id'],
-                        f"✅ *Сделка `#{text}` завершена!*\n\n📦 Товар получен.\n👤 Продавец: @{seller['username'] or seller['telegram_id']}\n\n_Спасибо за использование GGSel!_",
-                        parse_mode='Markdown'
-                    )
-                except Exception as e:
-                    await update.message.reply_text(f"⚠️ Сделка завершена, но не удалось уведомить участников: `{e}`", parse_mode='Markdown')
-                await update.message.reply_text(f"✅ *Сделка `#{text}` успешно завершена!*\n\n💰 Продавцу начислено: `{seller_payout}` USD\n📊 Комиссия: `{commission}` USD\n\n_Участники уведомлены._", parse_mode='Markdown', reply_markup=admin_panel_keyboard())
-            else:
-                await update.message.reply_text("❌ Ошибка при завершении сделки.", reply_markup=admin_panel_keyboard())
-            context.user_data.clear()
-            return
-
-        elif action == 'give_balance':
-            if user_id not in ADMIN_IDS:
-                await update.message.reply_text("⛔ Доступ запрещён")
-                return
-            parts = text.split()
-            if len(parts) != 2:
-                await update.message.reply_text("❌ Неверный формат. Используйте: ID пользователя и сумму")
-                return
-            user_input, amount_str = parts
-            try:
-                amount = int(amount_str)
-                if amount <= 0:
-                    await update.message.reply_text("❌ Сумма должна быть положительным числом.")
-                    return
-            except ValueError:
-                await update.message.reply_text("❌ Сумма должна быть числом.")
-                return
-            user = None
-            if user_input.startswith('@'):
-                username = user_input[1:]
-                user = db.get_user_by_username(username)
-                if not user:
-                    await update.message.reply_text(f"❌ Пользователь @{username} не найден.")
-                    return
-            else:
-                try:
-                    telegram_id = int(user_input)
-                    user = db.get_user_by_telegram_id(telegram_id)
-                    if not user:
-                        await update.message.reply_text(f"❌ Пользователь с ID {telegram_id} не найден.")
-                        return
-                except ValueError:
-                    await update.message.reply_text("❌ Неверный формат ID пользователя.")
-                    return
-            db.update_user_balance(user['id'], amount)
-            try:
-                await update.message.bot.send_message(
-                    user['telegram_id'],
-                    f"💳 *Пополнение баланса!*\n\n💰 Вам начислено: `+{amount}` USD\n📊 Текущий баланс: `{db.get_user_balance(user['id'])}` USD\n\n_Спасибо за использование GGSel!_",
-                    parse_mode='Markdown'
-                )
-            except:
-                pass
-            await update.message.reply_text(
-                f"✅ *Баланс успешно выдан!*\n\n👤 Пользователь: @{user['username'] or user['telegram_id']}\n💰 Сумма: `+{amount}` USD\n📊 Новый баланс: `{db.get_user_balance(user['id'])}` USD",
-                parse_mode='Markdown',
-                reply_markup=admin_panel_keyboard()
-            )
-            context.user_data.clear()
-            return
-
-        elif action in ('give_admin', 'remove_admin'):
-            if user_id not in ADMIN_IDS:
-                await update.message.reply_text("⛔ Доступ запрещён")
-                return
-            user_input = text.strip()
-            user = None
-            if user_input.startswith('@'):
-                username = user_input[1:]
-                user = db.get_user_by_username(username)
-                if not user:
-                    await update.message.reply_text(f"❌ Пользователь @{username} не найден.")
-                    return
-            else:
-                try:
-                    telegram_id = int(user_input)
-                    user = db.get_user_by_telegram_id(telegram_id)
-                    if not user:
-                        await update.message.reply_text(f"❌ Пользователь с ID {telegram_id} не найден.")
-                        return
-                except ValueError:
-                    await update.message.reply_text("❌ Неверный формат ID пользователя.")
-                    return
-            if action == 'give_admin':
-                db.set_admin_status(user['id'], True)
-                try:
-                    await update.message.bot.send_message(
-                        user['telegram_id'],
-                        "👑 *Поздравляем!*\n\nВам выданы права администратора GGSel.\nТеперь вам доступна команда `/hrteam`.",
-                        parse_mode='Markdown'
-                    )
-                except:
-                    pass
-                await update.message.reply_text(f"✅ *Права администратора выданы!*\n\n👤 Пользователь: @{user['username'] or user['telegram_id']}", parse_mode='Markdown', reply_markup=admin_panel_keyboard())
-            else:  # remove_admin
-                db.set_admin_status(user['id'], False)
-                try:
-                    await update.message.bot.send_message(
-                        user['telegram_id'],
-                        "👑 *Права администратора сняты.*",
-                        parse_mode='Markdown'
-                    )
-                except:
-                    pass
-                await update.message.reply_text(f"✅ *Права администратора сняты!*\n\n👤 Пользователь: @{user['username'] or user['telegram_id']}", parse_mode='Markdown', reply_markup=admin_panel_keyboard())
-            context.user_data.clear()
-            return
-
-    # Обычное сообщение (поддержка)
-    user_id = get_or_create_user(update.effective_user.id, update.effective_user.username)
-    db.add_support_message(user_id, update.message.text)
-    await update.message.reply_text("✅ *Ваше сообщение отправлено в поддержку.*\nМы свяжемся с вами в ближайшее время.", parse_mode='Markdown')
-
-async def hrteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ *Доступ запрещён.*", parse_mode='Markdown')
+@dp.message_handler(commands=['hrteam'])
+async def hrteam(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.reply("⛔ *Доступ запрещён.*", parse_mode="Markdown")
         return
     text = (
         "🛡 *Админ-панель GGSel*\n\n"
@@ -308,40 +70,263 @@ async def hrteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 *Статистика* — посмотреть общую статистику\n"
         "🔹 *Сообщения поддержки* — просмотреть обращения"
     )
-    await update.message.reply_text(text, parse_mode='Markdown', reply_markup=admin_panel_keyboard())
+    await message.reply(text, parse_mode="Markdown", reply_markup=admin_panel())
 
-def main():
-    init_db()
-    application = Application.builder().token(BOT_TOKEN).build()
+@dp.callback_query_handler(lambda c: True)
+async def callback_handler(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    data = callback_query.data
+    user_id = callback_query.from_user.id
 
-    # Команды
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("hrteam", hrteam))
+    if data == "balance":
+        uid = get_or_create_user(user_id, callback_query.from_user.username)
+        balance = db.get_user_balance(uid)
+        user = db.get_user_by_id(uid)
+        transactions = db.get_user_transactions(uid, limit=5)
+        text = f"💰 *Ваш баланс:* `{balance}` USD\n📊 *Успешных сделок:* `{user['success_deals']}`\n\n"
+        if transactions:
+            text += "📜 *Последние транзакции:*\n"
+            for t in transactions:
+                sign = "+" if t['amount'] > 0 else ""
+                text += f"• `{t['transaction_type']}`: {sign}`{t['amount']}` USD\n"
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
-    # Обработчик callback'ов (с состояниями)
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(callback_handler, pattern='^(admin_complete_deal|admin_give_balance|admin_give_admin|admin_remove_admin)$')],
-        states={
-            WAITING_COMPLETE_DEAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, callback_handler)],
-            WAITING_BALANCE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, callback_handler)],
-            WAITING_ADMIN_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, callback_handler)],
-        },
-        fallbacks=[CallbackQueryHandler(callback_handler, pattern='^(cancel_action|admin_back|close_admin|admin_stats|admin_support_messages|balance|my_deals|referrals|language|support|message_support)$')],
-        map_to_parent={
-            WAITING_COMPLETE_DEAL: -1,
-            WAITING_BALANCE_AMOUNT: -1,
-            WAITING_ADMIN_USER_ID: -1,
-        }
-    )
-    application.add_handler(conv_handler)
+    elif data == "my_deals":
+        uid = get_or_create_user(user_id, callback_query.from_user.username)
+        deals = db.get_user_deals(uid)
+        if not deals:
+            await callback_query.message.edit_text("📋 *У вас пока нет сделок.*", parse_mode="Markdown", reply_markup=main_menu())
+            return
+        text = "📋 *Ваши сделки:*\n\n"
+        for deal in deals[:5]:
+            status_emoji = {'created':'⏳','paid':'💳','completed':'✅','cancelled':'❌'}.get(deal['status'],'❓')
+            text += f"{status_emoji} *Сделка* `#{deal['memo']}`\n   Сумма: `{deal['amount']}` {deal['currency']}\n   Статус: _`{deal['status']}`_\n   📅 `{deal['created_at']}`\n\n"
+        if len(deals) > 5:
+            text += f"_... и ещё `{len(deals)-5}` сделок_"
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
-    # Обработчик обычных callback'ов (без состояний)
-    application.add_handler(CallbackQueryHandler(callback_handler, pattern='^(balance|my_deals|referrals|language|support|message_support|cancel_action|admin_back|close_admin|admin_stats|admin_support_messages)$'))
+    elif data == "referrals":
+        uid = get_or_create_user(user_id, callback_query.from_user.username)
+        earnings = db.get_referral_earnings(uid)
+        referrals = db.get_referrals(uid)
+        text = f"👥 *Реферальная программа*\n\n💰 Заработано: `{earnings}` USD\n👤 Приглашено: `{len(referrals)}` человек\n\n"
+        if referrals:
+            text += "📋 *Ваши рефералы:*\n"
+            for ref in referrals[:5]:
+                text += f"• @{ref['username'] or ref['telegram_id']} — заработано: `{ref['earned']}` USD\n"
+        text += f"\n🔗 *Ваша реферальная ссылка:*\n`t.me/ggsel_bot?start=ref{uid}`"
+        await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
-    # Обработчик текстовых сообщений (поддержка и ответы на админские действия)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    elif data == "language":
+        await callback_query.message.edit_text("🌐 *Выберите язык / Choose language*\n\n🇷🇺 Русский\n🇬🇧 English", parse_mode="Markdown", reply_markup=main_menu())
 
-    application.run_polling()
+    elif data == "support":
+        await callback_query.message.edit_text("🛠 *Техподдержка*\n\nЕсли у вас возникли вопросы, напишите нам.\nНажмите кнопку '✉️ Сообщение', чтобы отправить запрос.\n\n⏳ *Время ответа:* до 24 часов.", parse_mode="Markdown", reply_markup=main_menu())
+
+    elif data == "message_support":
+        await callback_query.message.edit_text("✉️ *Напишите ваше сообщение для поддержки.*\n\nОпишите вашу проблему подробно, приложите скриншоты если нужно.\nМы ответим вам в ближайшее время.", parse_mode="Markdown", reply_markup=main_menu())
+
+    elif data == "cancel_action":
+        await callback_query.message.edit_text("✅ *Действие отменено.*", parse_mode="Markdown", reply_markup=admin_panel())
+
+    elif data == "admin_back":
+        await callback_query.message.edit_text("🛡 *Админ-панель GGSel*\n\nВыберите действие:", parse_mode="Markdown", reply_markup=admin_panel())
+
+    elif data == "close_admin":
+        await callback_query.message.delete()
+
+    # Админские действия
+    elif data.startswith("admin_"):
+        if user_id not in ADMIN_IDS:
+            await callback_query.answer("⛔ Доступ запрещён", show_alert=True)
+            return
+        if data == "admin_complete_deal":
+            await callback_query.message.edit_text("✅ *Завершение сделки*\n\nВведите `мемо` (код) сделки для завершения.\nПример: `uCBnsWty`\n\nСделка будет завершена, продавцу начислены деньги.", parse_mode="Markdown", reply_markup=cancel_keyboard())
+            # Здесь нужно реализовать FSM для ввода мемо, но для упрощения мы будем обрабатывать следующим сообщением
+            # Можно сохранить состояние в кеш, но для простоты я предлагаю использовать следующий обработчик сообщений
+            # Сделаем через временную метку в кеше
+            from aiogram.contrib.middlewares.logging import LoggingMiddleware
+            # Сохраним состояние в глобальной переменной или через dp.current_state, но для простоты используем временный словарь
+            if not hasattr(dp, 'temp_data'):
+                dp.temp_data = {}
+            dp.temp_data[user_id] = {'action': 'complete_deal'}
+            await callback_query.answer()
+        elif data == "admin_give_balance":
+            await callback_query.message.edit_text("💳 *Выдача баланса*\n\nВведите ID пользователя (или @username) и сумму через пробел.\nПример: `123456 100` или `@username 50`\n\nСумма будет добавлена к балансу пользователя.", parse_mode="Markdown", reply_markup=cancel_keyboard())
+            if not hasattr(dp, 'temp_data'):
+                dp.temp_data = {}
+            dp.temp_data[user_id] = {'action': 'give_balance'}
+            await callback_query.answer()
+        elif data == "admin_give_admin":
+            await callback_query.message.edit_text("👑 *Выдача прав администратора*\n\nВведите ID пользователя (или @username), которому хотите выдать права администратора.\nПример: `123456` или `@username`", parse_mode="Markdown", reply_markup=cancel_keyboard())
+            if not hasattr(dp, 'temp_data'):
+                dp.temp_data = {}
+            dp.temp_data[user_id] = {'action': 'give_admin'}
+            await callback_query.answer()
+        elif data == "admin_remove_admin":
+            await callback_query.message.edit_text("👑 *Снятие прав администратора*\n\nВведите ID пользователя (или @username), у которого хотите снять права администратора.\nПример: `123456` или `@username`", parse_mode="Markdown", reply_markup=cancel_keyboard())
+            if not hasattr(dp, 'temp_data'):
+                dp.temp_data = {}
+            dp.temp_data[user_id] = {'action': 'remove_admin'}
+            await callback_query.answer()
+        elif data == "admin_stats":
+            text = "📊 *Статистика GGSel*\n\n👥 *Пользователей:* 64,742\n📈 *Всего сделок:* 12,847\n💰 *Общий оборот:* 2,345,678 USD\n👑 *Администраторов:* 5\n⭐ *Средний рейтинг:* 4.9\n\n_Данные обновлены: 14.07.2026_"
+            await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=admin_panel())
+        elif data == "admin_support_messages":
+            messages = db.get_unanswered_support_messages()
+            if not messages:
+                await callback_query.message.edit_text("📨 *Новых сообщений поддержки нет.*", parse_mode="Markdown", reply_markup=admin_panel())
+                return
+            text = "📨 *Сообщения поддержки:*\n\n"
+            for msg in messages[:5]:
+                usr = db.get_user_by_id(msg['user_id'])
+                text += f"👤 @{usr['username'] or usr['telegram_id']}\n📝 `{msg['message_text'][:100]}`\n📅 `{msg['created_at']}`\n\n"
+            if len(messages) > 5:
+                text += f"_... и ещё {len(messages)-5} сообщений_"
+            await callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=admin_panel())
+
+@dp.message_handler()
+async def handle_messages(message: types.Message):
+    user_id = message.from_user.id
+    # Проверяем, есть ли ожидание ответа на админское действие
+    if hasattr(dp, 'temp_data') and user_id in dp.temp_data:
+        action = dp.temp_data[user_id]['action']
+        text = message.text.strip()
+        if action == 'complete_deal':
+            if user_id not in ADMIN_IDS:
+                await message.reply("⛔ Доступ запрещён")
+                return
+            deal = db.get_deal_by_memo(text)
+            if not deal:
+                await message.reply("❌ Сделка с таким мемо не найдена. Попробуйте снова.")
+                return
+            if deal['status'] == 'completed':
+                await message.reply("❌ Эта сделка уже завершена.")
+                return
+            success = db.complete_deal(deal['id'])
+            if success:
+                seller = db.get_user_by_id(deal['seller_id'])
+                buyer = db.get_user_by_id(deal['buyer_id'])
+                commission = int(deal['amount'] * 0.05)
+                seller_payout = deal['amount'] - commission
+                try:
+                    await bot.send_message(
+                        seller['telegram_id'],
+                        f"✅ *Сделка `#{text}` завершена!*\n\n💰 Вам начислено: `{seller_payout}` USD\n📊 Комиссия: `{commission}` USD\n👤 Покупатель: @{buyer['username'] or buyer['telegram_id']}\n\n_Спасибо за использование GGSel!_",
+                        parse_mode="Markdown"
+                    )
+                    await bot.send_message(
+                        buyer['telegram_id'],
+                        f"✅ *Сделка `#{text}` завершена!*\n\n📦 Товар получен.\n👤 Продавец: @{seller['username'] or seller['telegram_id']}\n\n_Спасибо за использование GGSel!_",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+                await message.reply(
+                    f"✅ *Сделка `#{text}` успешно завершена!*\n\n💰 Продавцу начислено: `{seller_payout}` USD\n📊 Комиссия: `{commission}` USD\n\n_Участники уведомлены._",
+                    parse_mode="Markdown",
+                    reply_markup=admin_panel()
+                )
+            else:
+                await message.reply("❌ Ошибка при завершении сделки.", reply_markup=admin_panel())
+            del dp.temp_data[user_id]
+            return
+        elif action == 'give_balance':
+            parts = text.split()
+            if len(parts) != 2:
+                await message.reply("❌ Неверный формат. Используйте: ID пользователя и сумму")
+                return
+            user_input, amount_str = parts
+            try:
+                amount = int(amount_str)
+                if amount <= 0:
+                    await message.reply("❌ Сумма должна быть положительным числом.")
+                    return
+            except ValueError:
+                await message.reply("❌ Сумма должна быть числом.")
+                return
+            user = None
+            if user_input.startswith('@'):
+                username = user_input[1:]
+                user = db.get_user_by_username(username)
+                if not user:
+                    await message.reply(f"❌ Пользователь @{username} не найден.")
+                    return
+            else:
+                try:
+                    tid = int(user_input)
+                    user = db.get_user_by_telegram_id(tid)
+                    if not user:
+                        await message.reply(f"❌ Пользователь с ID {tid} не найден.")
+                        return
+                except ValueError:
+                    await message.reply("❌ Неверный формат ID пользователя.")
+                    return
+            db.update_user_balance(user['id'], amount)
+            try:
+                await bot.send_message(
+                    user['telegram_id'],
+                    f"💳 *Пополнение баланса!*\n\n💰 Вам начислено: `+{amount}` USD\n📊 Текущий баланс: `{db.get_user_balance(user['id'])}` USD\n\n_Спасибо за использование GGSel!_",
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+            await message.reply(
+                f"✅ *Баланс успешно выдан!*\n\n👤 Пользователь: @{user['username'] or user['telegram_id']}\n💰 Сумма: `+{amount}` USD\n📊 Новый баланс: `{db.get_user_balance(user['id'])}` USD",
+                parse_mode="Markdown",
+                reply_markup=admin_panel()
+            )
+            del dp.temp_data[user_id]
+            return
+        elif action in ('give_admin', 'remove_admin'):
+            user_input = text
+            user = None
+            if user_input.startswith('@'):
+                username = user_input[1:]
+                user = db.get_user_by_username(username)
+                if not user:
+                    await message.reply(f"❌ Пользователь @{username} не найден.")
+                    return
+            else:
+                try:
+                    tid = int(user_input)
+                    user = db.get_user_by_telegram_id(tid)
+                    if not user:
+                        await message.reply(f"❌ Пользователь с ID {tid} не найден.")
+                        return
+                except ValueError:
+                    await message.reply("❌ Неверный формат ID пользователя.")
+                    return
+            if action == 'give_admin':
+                db.set_admin_status(user['id'], True)
+                try:
+                    await bot.send_message(
+                        user['telegram_id'],
+                        "👑 *Поздравляем!*\n\nВам выданы права администратора GGSel.\nТеперь вам доступна команда `/hrteam`.",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+                await message.reply(f"✅ *Права администратора выданы!*\n\n👤 Пользователь: @{user['username'] or user['telegram_id']}", parse_mode="Markdown", reply_markup=admin_panel())
+            else:
+                db.set_admin_status(user['id'], False)
+                try:
+                    await bot.send_message(
+                        user['telegram_id'],
+                        "👑 *Права администратора сняты.*",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+                await message.reply(f"✅ *Права администратора сняты!*\n\n👤 Пользователь: @{user['username'] or user['telegram_id']}", parse_mode="Markdown", reply_markup=admin_panel())
+            del dp.temp_data[user_id]
+            return
+
+    # Если не админское действие – сохраняем как обращение в поддержку
+    uid = get_or_create_user(user_id, message.from_user.username)
+    db.add_support_message(uid, message.text)
+    await message.reply("✅ *Ваше сообщение отправлено в поддержку.*\nМы свяжемся с вами в ближайшее время.", parse_mode="Markdown")
 
 if __name__ == "__main__":
-    main()
+    init_db()
+    executor.start_polling(dp, skip_updates=True)
