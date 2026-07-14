@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ggsel-mini-app
+    runtime: static
+    buildCommand: echo "Static site"
+    staticPublishPath: ./mini_app
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
